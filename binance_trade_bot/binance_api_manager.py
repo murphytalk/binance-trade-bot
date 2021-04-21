@@ -39,8 +39,9 @@ class BinanceAPIManager:
             for update in payload:
                 sym = update['s']
                 if sym and update['e'] == '24hrMiniTicker' and (sym in self.all_tickers.all_tickers):
-                    self.logger.debug(f"Updated {sym} price to {update['c']}") 
-                    self.all_tickers.all_tickers[sym]['price'] = update['c']
+                    ticker = self.all_tickers.all_tickers[sym]
+                    self.logger.debug(f"Updated {sym} price from {ticker['price']} to {update['c']}") 
+                    ticker['price'] = update['c']
 
         self.websocket.start_miniticker_socket(process_payload)
         self.websocket.start()
