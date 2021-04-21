@@ -83,11 +83,6 @@ class BinanceAPIManager:
         if self.all_tickers is None:
             self.all_tickers = AllTickers(self.binance_client.get_all_tickers())
 
-        def process_payload(sym, payload):
-            self.logger.info(f'payload for {sym}: {payload}')
-
-        for sym in self.all_tickers.all_tickers.keys():
-            self.websocket.start_miniticker_socket( lambda payload: process_payload(sym, payload))
         return self.all_tickers
 
     def get_market_ticker_price(self, ticker_symbol: str):
