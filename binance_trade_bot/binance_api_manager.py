@@ -7,12 +7,19 @@ from binance.exceptions import BinanceAPIException
 from binance.websockets import BinanceSocketManager
 from cachetools import TTLCache, cached
 from sqlalchemy.sql.expression import false
+from sqlalchemy.util.langhelpers import symbol
 
 from .config import Config
 from .database import Database
 from .logger import Logger
 from .models import Coin
 
+from dataclasses import dataclass
+
+@dataclass
+class Balance:
+    dirty: bool
+    balance: float 
 
 class AllTickers:  # pylint: disable=too-few-public-methods
     def __init__(self, all_tickers: List[Dict]):
@@ -34,16 +41,31 @@ class BinanceAPIManager:
         self.db = db
         self.logger = logger
         self.all_tickers = None
+        self.account_balance = None # ticker => Balance
 
-        def process_payload(payload):
+        def process_miniticker_payload(payload):
             for update in payload:
                 sym = update['s']
                 if sym and update['e'] == '24hrMiniTicker' and (sym in self.all_tickers.all_tickers):
                     ticker = self.all_tickers.all_tickers[sym]
-                    self.logger.debug(f"Updated {sym} price from {ticker['price']} to {update['c']}") 
-                    ticker['price'] = update['c']
+                    new_price = update['c']
+                    self.logger.debug(f"Updated {sym} price from {ticker['price']} to {new_price}") 
+                    ticker['price'] = new_price
+        self.websocket.start_miniticker_socket(process_miniticker_payload)
 
-        self.websocket.start_miniticker_socket(process_payload)
+        # todo : https://binance-docs.github.io/apidocs/spot/en/#payload-account-update not supported by python API yet
+        def processs_account_update_payload(payload):
+            self.logger.debug(f'account update: {payload}')
+            if payload['e'] == 'outboundAccountPosition':
+                for b in payload['B']:
+                    sym = b['a']
+                    balance = self.account_balance[sym]
+                    if balance:
+                        new_balance = b['f']
+                        self.logger.debug(f"Updated {sym} balance from {balance} to {new_balance}")
+                        self.account_balance[sym] = new_balance
+                
+
         self.websocket.start()
 
     @cached(cache=TTLCache(maxsize=1, ttl=43200))
@@ -99,10 +121,19 @@ class BinanceAPIManager:
         """
         Get balance of a specific coin
         """
-        for currency_balance in self.binance_client.get_account()["balances"]:
-            if currency_balance["asset"] == currency_symbol:
-                return float(currency_balance["free"])
-        return None
+        def balance_is_dirty():
+            if self.account_balance is None:
+                return True
+            balance: Balance = self.account_balance[currency_symbol]
+            return balance and balance.dirty
+
+        if balance_is_dirty():
+            self.logger.debug('Calling API to get balances')
+            self.account_balance = { currency_balance["asset"]: Balance(False, float(currency_balance["free"])) for currency_balance in self.binance_client.get_account()["balances"]}
+            #self.logger.debug(f'Updated balances {self.account_balance}')
+
+        b = self.account_balance[currency_symbol]
+        return b.balance if b else None
 
     def retry(self, func, *args, **kwargs):
         time.sleep(1)
@@ -162,7 +193,10 @@ class BinanceAPIManager:
         return order_status
 
     def buy_alt(self, origin_coin: Coin, target_coin: Coin, all_tickers: AllTickers):
+        self.mark_balance_dirty(origin_coin.symbol)
+        self.mark_balance_dirty(target_coin.symbol)
         return None 
+        #todo : uncomment me
         #return self.retry(self._buy_alt, origin_coin, target_coin, all_tickers)
 
     def _buy_quantity(
@@ -215,8 +249,17 @@ class BinanceAPIManager:
 
         return order
 
+    def mark_balance_dirty(self, symbol):
+        self.logger.debug(f'Mark {symbol} balance dirty')
+        balance: Balance = self.account_balance[symbol] if self.account_balance is not None else None
+        if balance:
+            balance.dirty = True
+
     def sell_alt(self, origin_coin: Coin, target_coin: Coin):
+        self.mark_balance_dirty(origin_coin.symbol)
+        self.mark_balance_dirty(target_coin.symbol)
         return None 
+        #todo : uncomment me
         #return self.retry(self._sell_alt, origin_coin, target_coin)
 
     def _sell_quantity(self, origin_symbol: str, target_symbol: str, origin_balance: float = None):

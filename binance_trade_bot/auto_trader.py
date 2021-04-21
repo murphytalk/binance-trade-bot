@@ -116,7 +116,7 @@ class AutoTrader:
                 pair.to_coin, self.config.BRIDGE, False
             )
 
-            self.logger.debug(f"{pair.from_coin}/{pair.to_coin} current ratio {coin_opt_coin_ratio}, trans fee {transaction_fee }, init ratio {coin_opt_coin_ratio}")
+            self.logger.debug(f"{pair.from_coin.symbol}{pair.to_coin.symbol} current ratio {coin_opt_coin_ratio}, trans fee {transaction_fee }, init ratio {coin_opt_coin_ratio}")
 
             ratio_dict[pair] = (
                 coin_opt_coin_ratio - transaction_fee * self.config.SCOUT_MULTIPLIER * coin_opt_coin_ratio

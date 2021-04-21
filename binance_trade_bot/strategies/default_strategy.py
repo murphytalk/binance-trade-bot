@@ -5,7 +5,6 @@ from datetime import datetime
 from binance_trade_bot.auto_trader import AutoTrader
 from binance_trade_bot.models import Pair
 
-
 class Strategy(AutoTrader):
     def initialize(self):
         super().initialize()
