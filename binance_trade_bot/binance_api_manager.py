@@ -4,7 +4,9 @@ from typing import Dict, List
 
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
+from binance.websockets import BinanceSocketManager
 from cachetools import TTLCache, cached
+from sqlalchemy.sql.expression import false
 
 from .config import Config
 from .database import Database
@@ -14,10 +16,10 @@ from .models import Coin
 
 class AllTickers:  # pylint: disable=too-few-public-methods
     def __init__(self, all_tickers: List[Dict]):
-        self.all_tickers = all_tickers
+        self.all_tickers: Dict =  { t["symbol"] : t for t in all_tickers }
 
     def get_price(self, ticker_symbol):
-        ticker = next((t for t in self.all_tickers if t["symbol"] == ticker_symbol), None)
+        ticker = self.all_tickers[ticker_symbol]
         return float(ticker["price"]) if ticker else None
 
 
@@ -28,8 +30,20 @@ class BinanceAPIManager:
             config.BINANCE_API_SECRET_KEY,
             tld=config.BINANCE_TLD,
         )
+        self.websocket = BinanceSocketManager(self.binance_client)
         self.db = db
         self.logger = logger
+        self.all_tickers = None
+
+        def process_payload(payload):
+            for update in payload:
+                sym = update['s']
+                if sym and update['e'] == '24hrMiniTicker' and (sym in self.all_tickers.all_tickers):
+                    self.logger.debug(f"Updated {sym} price to {update['c']}") 
+                    self.all_tickers.all_tickers[sym]['price'] = update['c']
+
+        self.websocket.start_miniticker_socket(process_payload)
+        self.websocket.start()
 
     @cached(cache=TTLCache(maxsize=1, ttl=43200))
     def get_trade_fees(self) -> Dict[str, float]:
@@ -66,7 +80,15 @@ class BinanceAPIManager:
         """
         Get ticker price of all coins
         """
-        return AllTickers(self.binance_client.get_all_tickers())
+        if self.all_tickers is None:
+            self.all_tickers = AllTickers(self.binance_client.get_all_tickers())
+
+        def process_payload(sym, payload):
+            self.logger.info(f'payload for {sym}: {payload}')
+
+        for sym in self.all_tickers.all_tickers.keys():
+            self.websocket.start_miniticker_socket( lambda payload: process_payload(sym, payload))
+        return self.all_tickers
 
     def get_market_ticker_price(self, ticker_symbol: str):
         """
@@ -144,7 +166,8 @@ class BinanceAPIManager:
         return order_status
 
     def buy_alt(self, origin_coin: Coin, target_coin: Coin, all_tickers: AllTickers):
-        return self.retry(self._buy_alt, origin_coin, target_coin, all_tickers)
+        return None 
+        #return self.retry(self._buy_alt, origin_coin, target_coin, all_tickers)
 
     def _buy_quantity(
         self, origin_symbol: str, target_symbol: str, target_balance: float = None, from_coin_price: float = None
@@ -197,7 +220,8 @@ class BinanceAPIManager:
         return order
 
     def sell_alt(self, origin_coin: Coin, target_coin: Coin):
-        return self.retry(self._sell_alt, origin_coin, target_coin)
+        return None 
+        #return self.retry(self._sell_alt, origin_coin, target_coin)
 
     def _sell_quantity(self, origin_symbol: str, target_symbol: str, origin_balance: float = None):
         origin_balance = origin_balance or self.get_currency_balance(origin_symbol)
